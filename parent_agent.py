@@ -85,7 +85,8 @@ def route_message():
                     "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
                     "Due Date": {"date": {"start": due_date}}
                 }
-            }
+        }
+
 
             headers = {
                 "Authorization": f"Bearer {NOTION_API_KEY}",
