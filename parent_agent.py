@@ -101,7 +101,7 @@ def route_message():
 
             print("📝 Notion Response:", notion_resp.status_code, notion_resp.text)
 
-            if notion_resp.status_code != 200:
+            if notion_resp.status_code not in [200, 201]:
                 return jsonify({
                     "error": "Failed to add to Notion",
                     "details": notion_resp.text
