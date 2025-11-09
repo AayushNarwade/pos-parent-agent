@@ -80,12 +80,21 @@ def route_message():
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
-                    "Task Name": {"title": [{"text": {"content": task_name}}]},
-                    "Status": {"select": {"name": result.get("status", "To Do")}},
-                    "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
-                    "Due Date": {"date": {"start": due_date}}
+                    "Task Name": {
+                        "title": [{"text": {"content": task_name}}]
+                    },
+                    "Status": {
+                        "select": {"name": result.get("status", "To Do")}
+                    },
+                    "Avatar": {
+                        "select": {"name": result.get("avatar", "Producer")}
+                    },
+                    "Due Date": {
+                        "date": {"start": due_date}
+                    }
                 }
-        }
+            }
+
 
 
             headers = {
