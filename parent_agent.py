@@ -1,108 +1,87 @@
 from flask import Flask, request, jsonify
-import os, json, re
-from dotenv import load_dotenv
+import os
+import json
 from groq import Groq
-from flask_cors import CORS
-
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-client = Groq(api_key=GROQ_API_KEY)
-MODEL_NAME = "llama-3.3-70b-specdevi"  # stable, JSON-friendly
+from datetime import datetime, timedelta
+import pytz
 
 app = Flask(__name__)
-CORS(app)
 
+# ✅ Load environment variable
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY)
+
+# ==============================
+# SYSTEM PROMPT
+# ==============================
 SYSTEM_PROMPT = """
-You are the 'Parent Agent' for the Present Operating System (POS).
-TIMEZONE: Asia/Kolkata (IST, UTC+05:30).
+You are the core reasoning engine of the Present Operating System (POS).
+Your job is to classify and structure user messages into either TASK or RESEARCH.
 
-You must classify the user message into exactly one intent:
-- TASK      → actions, reminders, meetings, habits, follow-ups
-- RESEARCH  → questions, info lookup, factual queries
-- UNKNOWN   → chit chat, unclear, off-topic
-
-STRICT OUTPUT: JSON only. Never add text outside JSON.
-
-For TASK intent, extract a structured task:
-- title: short, capitalized action (strip fillers like "remind me to", "please")
-- datetime_iso: an ISO8601 datetime in IST with offset, if a time/date is implied
-  * AUTO_DATE = YES: If time present but date missing, choose today if time is in the future,
-    otherwise tomorrow. If date words like "tomorrow", "Monday", or "on 12th" exist, resolve to that date.
-  * Interpret ambiguous “at 10” as 10:00 **AM** unless explicitly PM.
-  * Preserve +05:30 offset, e.g. "2025-11-10T16:00:00+05:30".
-
-If no time is implied, set datetime_iso to null.
-
-For RESEARCH and UNKNOWN, just echo cleaned text in "data".
-
-Return one of these shapes:
-
-1) TASK:
+If the user’s message is an actionable item (“remind”, “schedule”, “email”, “call”), 
+return:
 {
   "intent": "TASK",
-  "data": "<cleaned user text>",
+  "data": "<original_message>",
   "task": {
-    "title": "<clean, short, capitalized>",
-    "datetime_iso": "<ISO with +05:30 or null>"
+    "title": "<clean concise task title>",
+    "datetime_iso": "<ISO8601 datetime in IST, or null if not specified>"
   }
 }
 
-2) RESEARCH:
+If it’s a question, return:
 {
   "intent": "RESEARCH",
   "data": "<question>"
 }
 
-3) UNKNOWN:
-{
-  "intent": "UNKNOWN",
-  "data": "<cleaned text>"
-}
+Always produce valid JSON — no markdown, no code blocks, no explanations.
+If unsure, still produce a JSON with "intent": "UNKNOWN".
 """
 
-def extract_json(text: str):
-    """Be tolerant if the model wraps JSON in extra text."""
-    try:
-        return json.loads(text)
-    except Exception:
-        m = re.search(r"\{.*\}", text, re.S)
-        if m:
-            return json.loads(m.group(0))
-        raise
-
+# ==============================
+# POST ENDPOINT
+# ==============================
 @app.route("/route", methods=["POST"])
 def route_message():
     try:
-        user_input = (request.get_json() or {}).get("message", "").strip()
-        if not user_input:
-            return jsonify({"intent": "UNKNOWN", "data": ""}), 200
+        data = request.get_json()
+        message = data.get("message", "").strip()
 
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            temperature=0.1,
+        if not message:
+            return jsonify({"error": "Empty message"}), 400
+
+        # Call Groq for reasoning
+        completion = client.chat.completions.create(
+            model="llama3-8b-8192",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_input},
+                {"role": "user", "content": message}
             ],
+            temperature=0.3,
+            max_tokens=300
         )
-        raw = resp.choices[0].message.content.strip()
-        result = extract_json(raw)
 
-        # Hard guarantees
-        if result.get("intent") == "TASK":
-            task = result.get("task") or {}
-            task.setdefault("title", user_input)
-            task.setdefault("datetime_iso", None)
-            result["task"] = task
-        return jsonify(result), 200
+        raw_reply = completion.choices[0].message.content.strip()
+
+        # Attempt to parse JSON safely
+        try:
+            parsed = json.loads(raw_reply)
+        except Exception:
+            parsed = {"intent": "UNKNOWN", "data": message, "raw": raw_reply}
+
+        print("🔍 Parsed JSON:", parsed)
+        return jsonify(parsed)
 
     except Exception as e:
+        print("❌ Server Error:", e)
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok"})
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+    app.run(host="0.0.0.0", port=8080)
