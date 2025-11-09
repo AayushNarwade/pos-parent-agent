@@ -19,26 +19,27 @@ IST = pytz.timezone("Asia/Kolkata")
 # ========== SYSTEM PROMPT ==========
 SYSTEM_PROMPT = """
 You are the reasoning engine of the Present Operating System (POS).
-You must classify and structure messages into actionable data.
+Classify messages into actionable task data.
 
-If the message is a task (like 'remind me', 'schedule', 'call', 'email'):
-Return ONLY valid JSON in this format:
+If the message is a task (like "remind me to call Aayush at 9pm"), extract:
 {
   "intent": "TASK",
-  "task_name": "<clean, short task name>",
-  "due_date": "<ISO8601 datetime in IST, if mentioned, else null>",
+  "task": "Call",
+  "person_name": "Aayush",
+  "due_date": "<ISO8601 datetime in IST or null>",
   "status": "To Do",
   "avatar": "Producer"
 }
 
-If it's a question or non-task, return:
+If it's a question, return:
 {
   "intent": "RESEARCH",
   "question": "<the user's query>"
 }
 
-Do NOT include explanations or markdown — only JSON.
+Always return pure JSON with no markdown or explanations.
 """
+    
 
 # ========== ENDPOINTS ==========
 @app.route("/route", methods=["POST"])
@@ -80,12 +81,14 @@ def route_message():
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
-                    "Task Name": {"title": [{"text": {"content": task_name}}]},
+                    "Task": {"title": [{"text": {"content": task_name}}]},
+                    "Name": {"rich_text": [{"text": {"content": result.get("person_name", "Unknown")}}]},
                     "Status": {"select": {"name": result.get("status", "To Do")}},
                     "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
                     "Due Date": {"date": {"start": due_date}}
                 }
             }
+
 
 
 
