@@ -8,7 +8,8 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
-MODEL_NAME = "llama3-70b-8192"
+MODEL_NAME = "llama-3.1-70b-versatile"
+
 
 app = Flask(__name__)
 CORS(app)  # allow calls from Streamlit
