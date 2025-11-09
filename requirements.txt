@@ -4,3 +4,4 @@ python-dotenv
 groq
 gunicorn
 pytz
+requests
