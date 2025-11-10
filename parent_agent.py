@@ -89,7 +89,7 @@ def route_message():
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
                     "Task": {"title": [{"text": {"content": task_name}}]},
-                    "Name": {"rich_text": [{"text": {"content": person_name}}]},
+                    "Name": {"text": [{"text": {"content": person_name}}]},
                     "Status": {"select": {"name": status}},
                     "Avatar": {"select": {"name": avatar}},
                     "XP": {"number": xp},
