@@ -3,19 +3,19 @@ import os
 import json
 import requests
 from groq import Groq
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
 
 app = Flask(__name__)
 load_dotenv()
 
-
 # ========== ENVIRONMENT VARIABLES ==========
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 XP_AGENT_URL = os.getenv("XP_AGENT_URL", "https://xp-agent.onrender.com/award_xp")
+CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "http://127.0.0.1:10002/create_event")
 
 client = Groq(api_key=GROQ_API_KEY)
 IST = pytz.timezone("Asia/Kolkata")
@@ -128,6 +128,25 @@ def call_xp_agent(task_name, avatar="Producer", reason="Task Completed", due_dat
         print("❌ Failed to contact XP Agent:", e)
         return 500, str(e)
 
+def call_calendar_agent(title, description, start_iso, end_iso=None):
+    """
+    Sends event details to the Calendar Agent for scheduling in Google Calendar.
+    """
+    payload = {
+        "title": title,
+        "description": description or "",
+        "start_time": start_iso,
+        "end_time": end_iso or (datetime.fromisoformat(start_iso) + timedelta(minutes=30)).isoformat()
+    }
+
+    try:
+        r = requests.post(CALENDAR_AGENT_URL, json=payload, timeout=6)
+        print("📆 Calendar Agent Response:", r.status_code, r.text)
+        return r.status_code, r.text
+    except Exception as e:
+        print("❌ Failed to reach Calendar Agent:", e)
+        return 500, str(e)
+
 
 # ========== ENDPOINT ==========
 @app.route("/route", methods=["POST"])
@@ -179,17 +198,21 @@ def route_message():
             if not due_date or not str(now_ist.year) in due_date:
                 due_date = now_ist.isoformat()
 
+            # --- Build Notion Payload ---
+            safe_person_name = result.get("person_name", "General") or "General"
+
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
-                    "Task": {"title": [{"text": {"content": task_name}}]},
-                    "Name": {"rich_text": [{"text": {"content": person_name}}]},
+                    "Task": {"title": [{"text": {"content": task_name or 'Untitled Task'}}]},
+                    "Name": {"rich_text": [{"text": {"content": safe_person_name}}]},
                     "Status": {"select": {"name": status}},
                     "Avatar": {"select": {"name": avatar}},
                     "XP": {"number": xp},
                     "Due Date": {"date": {"start": due_date}},
                 },
             }
+
 
             headers = {
                 "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -206,9 +229,27 @@ def route_message():
             if notion_resp.status_code not in (200, 201):
                 return jsonify({"error": "Failed to add to Notion", "details": notion_resp.text}), 500
 
+            # ---------- Optional: Schedule to Calendar if due_date is valid ----------
+            if due_date:
+                try:
+                    dt_start = datetime.fromisoformat(due_date)
+                    dt_end = dt_start + timedelta(minutes=30)
+                    start_iso = dt_start.isoformat()
+                    end_iso = dt_end.isoformat()
+
+                    cal_status, cal_resp = call_calendar_agent(
+                        title=f"{task_name}",
+                        description=f"Auto-scheduled task: {task_name}",
+                        start_iso=start_iso,
+                        end_iso=end_iso
+                    )
+                    print("📅 Calendar Integration:", cal_status, cal_resp)
+                except Exception as e:
+                    print("⚠️ Calendar scheduling skipped:", e)
+
             return jsonify({
                 "intent": "TASK",
-                "status": "Task added to Notion",
+                "status": "Task added to Notion (and Calendar if due_date found)",
                 "task_name": task_name,
                 "person_name": person_name,
                 "xp": xp,
