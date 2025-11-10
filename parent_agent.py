@@ -39,7 +39,7 @@ If it's a question, return:
 
 Always return pure JSON with no markdown or explanations.
 """
-    
+
 
 # ========== ENDPOINTS ==========
 @app.route("/route", methods=["POST"])
@@ -81,13 +81,14 @@ def route_message():
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
-                    "Task": {"title": [{"text": {"content": task_name}}]},
+                    "Task": {"title": [{"text": {"content": result.get("task", "Untitled Task")}}]},
                     "Name": {"rich_text": [{"text": {"content": result.get("person_name", "Unknown")}}]},
                     "Status": {"select": {"name": result.get("status", "To Do")}},
                     "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
                     "Due Date": {"date": {"start": due_date}}
                 }
             }
+
 
 
 
