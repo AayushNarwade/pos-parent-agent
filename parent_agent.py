@@ -19,29 +19,30 @@ IST = pytz.timezone("Asia/Kolkata")
 # ========== SYSTEM PROMPT ==========
 SYSTEM_PROMPT = """
 You are the reasoning engine of the Present Operating System (POS).
-Classify messages into actionable task data.
+You must classify and structure messages into actionable data.
 
-If the message is a task (like "remind me to call Aayush at 9pm"), extract:
+If the message is a task (like 'remind me', 'schedule', 'call', 'email'):
+Return ONLY valid JSON in this format:
 {
   "intent": "TASK",
-  "task": "Call",
-  "person_name": "Aayush",
-  "due_date": "<ISO8601 datetime in IST or null>",
+  "task_name": "<clean, short task name, e.g., 'Call'>",
+  "person_name": "<who the task involves, e.g., 'Aayush'>",
+  "due_date": "<ISO8601 datetime in IST, if mentioned, else null>",
   "status": "To Do",
-  "avatar": "Producer"
+  "avatar": "Producer",
+  "xp": 0
 }
 
-If it's a question, return:
+If it's a question or non-task, return:
 {
   "intent": "RESEARCH",
   "question": "<the user's query>"
 }
 
-Always return pure JSON with no markdown or explanations.
+Do NOT include explanations or markdown — only JSON.
 """
 
-
-# ========== ENDPOINTS ==========
+# ========== ENDPOINT ==========
 @app.route("/route", methods=["POST"])
 def route_message():
     try:
@@ -50,6 +51,7 @@ def route_message():
         if not message:
             return jsonify({"error": "Empty message"}), 400
 
+        # --- Call Groq for reasoning ---
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -63,36 +65,37 @@ def route_message():
         raw_reply = completion.choices[0].message.content.strip()
         print("🧠 Raw Groq Response:", raw_reply)
 
+        # --- Parse JSON safely ---
         try:
             result = json.loads(raw_reply)
         except Exception:
             return jsonify({"intent": "UNKNOWN", "raw_reply": raw_reply}), 200
 
-        # ===============================
-        # Handle TASK intent
-        # ===============================
+        # --- Handle TASK intent ---
         if result.get("intent") == "TASK":
-            task_name = result.get("task", "Untitled Task")
+            task_name = result.get("task_name", "Untitled Task")
+            person_name = result.get("person_name", "Unknown")
             due_date = result.get("due_date")
+            status = result.get("status", "To Do")
+            avatar = result.get("avatar", "Producer")
+            xp = result.get("xp", 0)
 
+            # Use current time if not provided
             if not due_date:
                 due_date = datetime.now(IST).isoformat()
 
+            # --- Build Notion payload ---
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
                     "Task": {"title": [{"text": {"content": task_name}}]},
-                    "Name": {"rich_text": [{"text": {"content": result.get("person_name", "Unknown")}}]},
-                    "Status": {"select": {"name": result.get("status", "To Do")}},
-                    "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
+                    "Name": {"rich_text": [{"text": {"content": person_name}}]},
+                    "Status": {"select": {"name": status}},
+                    "Avatar": {"select": {"name": avatar}},
+                    "XP": {"number": xp},
                     "Due Date": {"date": {"start": due_date}}
                 }
             }
-
-
-
-
-
 
             headers = {
                 "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -108,7 +111,7 @@ def route_message():
 
             print("📝 Notion Response:", notion_resp.status_code, notion_resp.text)
 
-            if notion_resp.status_code not in [200, 201]:
+            if notion_resp.status_code != 200:
                 return jsonify({
                     "error": "Failed to add to Notion",
                     "details": notion_resp.text
@@ -118,12 +121,12 @@ def route_message():
                 "intent": "TASK",
                 "status": "Task added to Notion",
                 "task_name": task_name,
+                "person_name": person_name,
+                "xp": xp,
                 "due_date": due_date
             }), 200
 
-        # ===============================
-        # Handle RESEARCH intent
-        # ===============================
+        # --- Handle RESEARCH intent ---
         elif result.get("intent") == "RESEARCH":
             return jsonify({
                 "intent": "RESEARCH",
