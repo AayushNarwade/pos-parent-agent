@@ -5,7 +5,17 @@ services:
     plan: free
     region: singapore
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python parent_agent.py"
+    startCommand: "gunicorn -w 2 -b 0.0.0.0:10000 parent_agent:app"
     envVars:
       - key: GROQ_API_KEY
+        sync: false
+      - key: NOTION_API_KEY
+        sync: false
+      - key: NOTION_DATABASE_ID
+        sync: false
+      - key: EMAIL_AGENT_URL
+        sync: false
+      - key: XP_AGENT_URL
+        sync: false
+      - key: CALENDAR_AGENT_URL
         sync: false
