@@ -146,15 +146,20 @@ def call_calendar_agent(title, description, start_iso, end_iso=None):
 def call_email_agent(to_email, context):
     """
     Calls the AI Email Agent to create an email draft.
+    Render free instances can have cold-start delays, so use a longer timeout.
     """
     payload = {"to": to_email, "context": context}
     try:
-        r = requests.post(EMAIL_AGENT_URL, json=payload, timeout=10)
+        r = requests.post(EMAIL_AGENT_URL, json=payload, timeout=35)  # increased from 10 → 35 sec
         print("📧 Email Agent Response:", r.status_code, r.text)
         return r.status_code, r.text
+    except requests.exceptions.ReadTimeout:
+        print("⚠️ Email Agent took too long to respond (timeout). Consider waking it manually.")
+        return 504, "Email Agent timeout — service may be waking up."
     except Exception as e:
         print("❌ Failed to contact Email Agent:", e)
         return 500, str(e)
+
 
 
 # ========== ENDPOINT ==========
