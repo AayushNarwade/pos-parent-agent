@@ -72,7 +72,7 @@ def route_message():
         # Handle TASK intent
         # ===============================
         if result.get("intent") == "TASK":
-            task_name = result.get("task_name", "Untitled Task")
+            task_name = result.get("task", "Untitled Task")
             due_date = result.get("due_date")
 
             if not due_date:
@@ -81,7 +81,7 @@ def route_message():
             payload = {
                 "parent": {"database_id": NOTION_DATABASE_ID},
                 "properties": {
-                    "Task": {"title": [{"text": {"content": result.get("task", "Untitled Task")}}]},
+                    "Task": {"title": [{"text": {"content": task_name}}]},
                     "Name": {"rich_text": [{"text": {"content": result.get("person_name", "Unknown")}}]},
                     "Status": {"select": {"name": result.get("status", "To Do")}},
                     "Avatar": {"select": {"name": result.get("avatar", "Producer")}},
