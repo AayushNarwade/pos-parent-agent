@@ -51,15 +51,23 @@ def route_message():
         if not message:
             return jsonify({"error": "Empty message"}), 400
 
+        # --- Inject current IST date/time for context ---
+        current_time_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S %Z")
+        system_prompt_with_date = (
+            SYSTEM_PROMPT
+            + f"\n\nToday's date and time (IST): {current_time_ist}."
+            + " Always generate due_date relative to this current date."
+        )
+
         # --- Call Groq ---
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message}
+                {"role": "system", "content": system_prompt_with_date},
+                {"role": "user", "content": message},
             ],
             temperature=0.3,
-            max_tokens=300
+            max_tokens=300,
         )
 
         raw_reply = completion.choices[0].message.content.strip()
@@ -80,8 +88,10 @@ def route_message():
             avatar = result.get("avatar", "Producer")
             xp = result.get("xp", 0)
 
-            if not due_date:
-                due_date = datetime.now(IST).isoformat()
+            # --- Safety fallback: use current date if invalid or null ---
+            now_ist = datetime.now(IST)
+            if not due_date or not str(now_ist.year) in due_date:
+                due_date = now_ist.isoformat()
 
             # --- Build Notion payload ---
             payload = {
@@ -92,47 +102,61 @@ def route_message():
                     "Status": {"select": {"name": status}},
                     "Avatar": {"select": {"name": avatar}},
                     "XP": {"number": xp},
-                    "Due Date": {"date": {"start": due_date}}
-                }
+                    "Due Date": {"date": {"start": due_date}},
+                },
             }
 
             headers = {
                 "Authorization": f"Bearer {NOTION_API_KEY}",
                 "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
 
             notion_resp = requests.post(
-                "https://api.notion.com/v1/pages",
-                headers=headers,
-                json=payload
+                "https://api.notion.com/v1/pages", headers=headers, json=payload
             )
 
             print("📝 Notion Response:", notion_resp.status_code, notion_resp.text)
 
             if notion_resp.status_code not in (200, 201):
-                return jsonify({
-                    "error": "Failed to add to Notion",
-                    "details": notion_resp.text
-                }), 500
+                return (
+                    jsonify(
+                        {
+                            "error": "Failed to add to Notion",
+                            "details": notion_resp.text,
+                        }
+                    ),
+                    500,
+                )
 
-            return jsonify({
-                "intent": "TASK",
-                "status": "Task added to Notion",
-                "task_name": task_name,
-                "person_name": person_name,
-                "xp": xp,
-                "due_date": due_date
-            }), 200
+            # --- Return detailed response to UI ---
+            return (
+                jsonify(
+                    {
+                        "intent": "TASK",
+                        "status": "Task added to Notion",
+                        "task_name": task_name,
+                        "person_name": person_name,
+                        "xp": xp,
+                        "due_date": due_date,
+                    }
+                ),
+                200,
+            )
 
         # --- Handle RESEARCH intent ---
         elif result.get("intent") == "RESEARCH":
-            return jsonify({
-                "intent": "RESEARCH",
-                "response": "Research processing coming soon!"
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "intent": "RESEARCH",
+                        "response": "Research processing coming soon!",
+                    }
+                ),
+                200,
+            )
 
-        # --- Unknown ---
+        # --- Unknown intent ---
         else:
             return jsonify({"intent": "UNKNOWN", "response": raw_reply}), 200
 
