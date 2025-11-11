@@ -1,16 +1,21 @@
 services:
   - type: web
-    name: pos-parent-agent-v2
+    name: pos-parent-agent-v3
     env: python
     plan: free
     region: singapore
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app # ✅ stable for Render free plan
 
+    # -------------------
+    # Build & Start Commands
+    # -------------------
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app # ✅ stable for Render Free plan
+
+    # -------------------
+    # Environment Variables
+    # -------------------
     envVars:
-      # -------------------
-      # Core AI + Notion Credentials
-      # -------------------
+      # === Core AI + Notion Credentials ===
       - key: GROQ_API_KEY
         sync: false
       - key: NOTION_API_KEY
@@ -18,9 +23,7 @@ services:
       - key: NOTION_DATABASE_ID
         sync: false
 
-      # -------------------
-      # Linked Child Agents
-      # -------------------
+      # === Linked Child Agents ===
       - key: XP_AGENT_URL
         value: "https://xp-agent.onrender.com/award_xp"
       - key: CALENDAR_AGENT_URL
@@ -32,9 +35,7 @@ services:
       - key: MESSAGING_AGENT_URL
         value: "https://messaging-agent.onrender.com/notify"
 
-      # -------------------
-      # Python Version
-      # -------------------
+      # === Runtime Configuration ===
       - key: PYTHON_VERSION
         value: 3.10
 
@@ -42,3 +43,4 @@ services:
     # Health Check
     # -------------------
     healthCheckPath: /
+    autoDeploy: true

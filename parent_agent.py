@@ -17,7 +17,7 @@ NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
 XP_AGENT_URL = os.getenv("XP_AGENT_URL", "https://xp-agent.onrender.com/award_xp")
-CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "https://calendar-agent-7ofo.onrender.com/create_event")
+CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "https://calendar-agent.onrender.com/create_event")
 EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent-x7n0.onrender.com/create_draft")
 RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "https://research-agent.onrender.com/research")
 MESSAGING_AGENT_URL = os.getenv("MESSAGING_AGENT_URL", "https://messaging-agent.onrender.com/notify")
@@ -62,6 +62,18 @@ Use temporal reasoning to determine due dates in Asia/Kolkata timezone (ISO form
   "source": "Parent Agent"
 }
 
+### CALENDAR FORMAT:
+{
+  "intent": "CALENDAR",
+  "event_name": "<event title>",
+  "result": "<purpose of the event>",
+  "purpose": "<why it matters>",
+  "start_time": "<ISO datetime>",
+  "end_time": "<ISO datetime>",
+  "context": "<original message>",
+  "source": "Parent Agent"
+}
+
 ---
 
 ### EXAMPLES:
@@ -87,6 +99,19 @@ User: "I have called Aayush"
   "intent": "COMPLETION",
   "message": "I have called Aayush",
   "context": "related to the task 'Call Aayush'",
+  "source": "Parent Agent"
+}
+
+User: "Schedule a meeting with team to discuss design at 4pm"
+→
+{
+  "intent": "CALENDAR",
+  "event_name": "Team Design Discussion",
+  "result": "Align team on design ideas",
+  "purpose": "Collaboration and feedback",
+  "start_time": "2025-11-12T16:00:00+05:30",
+  "end_time": "2025-11-12T17:00:00+05:30",
+  "context": "Schedule a meeting with team to discuss design at 4pm",
   "source": "Parent Agent"
 }
 """
@@ -115,7 +140,6 @@ def create_task_in_notion(task_data):
     now_iso = datetime.now(IST).isoformat()
     due_date = task_data.get("due_date")
 
-    # Default fallback: same day 11:59 PM
     if not due_date:
         due_date = (datetime.now(IST).replace(hour=23, minute=59, second=0)).isoformat()
 
@@ -128,7 +152,7 @@ def create_task_in_notion(task_data):
             "Massive Action Plan (M)": {"rich_text": [{"text": {"content": ', '.join(task_data.get("massive_action_plan", []))}}]},
             "PAEI Role": {"select": {"name": task_data.get("paei_role", "Producer")}},
             "Status": {"select": {"name": task_data.get("status", "To Do")}},
-            "XP": {"number": 0},  # Default XP
+            "XP": {"number": 0},
             "Due Date": {"date": {"start": due_date}},
             "Created At": {"date": {"start": now_iso}},
             "Source": {"rich_text": [{"text": {"content": task_data.get("source", "Parent Agent")}}]},
@@ -171,7 +195,7 @@ def update_notion_with_link(notion_id: str, field: str, link: str):
 # ----------------- ROUTES -----------------
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "✅ POS Parent Agent (Completion Enabled) Running"}), 200
+    return jsonify({"status": "✅ POS Parent Agent Running"}), 200
 
 
 @app.route("/route", methods=["POST"])
@@ -218,7 +242,6 @@ def route_message():
 
         # ---------- COMPLETION ----------
         elif intent == "COMPLETION":
-            # forward to XP Agent
             code, xp_resp = call_agent(XP_AGENT_URL, intent_data, "XP Agent")
             return jsonify({
                 "intent": "COMPLETION",
@@ -229,18 +252,23 @@ def route_message():
 
         # ---------- CALENDAR ----------
         elif intent == "CALENDAR":
+            event_title = intent_data.get("event_name") or intent_data.get("title") or message
+
             task_info = {
-                "task_name": intent_data.get("title", "Untitled Event"),
+                "task_name": event_title,
                 "result": "Calendar event scheduled",
                 "purpose": "Manage meetings and events",
                 "massive_action_plan": ["Schedule meeting", "Confirm details"],
                 "paei_role": "Administrator",
                 "status": "To Do",
-                "context": intent_data.get("context", ""),
+                "context": intent_data.get("context", message),
                 "source": "Parent Agent"
             }
+
             notion_status, notion_id = create_task_in_notion(task_info)
-            code, cal_resp = call_agent(CALENDAR_AGENT_URL, intent_data, "Calendar Agent")
+
+            calendar_payload = {"message": message}
+            code, cal_resp = call_agent(CALENDAR_AGENT_URL, calendar_payload, "Calendar Agent")
 
             try:
                 cal_data = json.loads(cal_resp)
@@ -304,6 +332,6 @@ def route_message():
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))  # ✅ Render overrides this
+    port = int(os.getenv("PORT", 10000))
     print(f"🚀 Parent Agent running locally on port {port}")
     app.run(host="0.0.0.0", port=port)
