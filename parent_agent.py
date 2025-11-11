@@ -304,6 +304,6 @@ def route_message():
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
+    port = int(os.getenv("PORT", 10000))  # ✅ Render overrides this
     print(f"🚀 Parent Agent running locally on port {port}")
     app.run(host="0.0.0.0", port=port)
