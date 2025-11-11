@@ -27,8 +27,8 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ----------------- SYSTEM PROMPT -----------------
 SYSTEM_PROMPT = """
-You are the reasoning core of the Present Operating System (POS).
-Interpret user input and return ONLY VALID JSON — no Markdown, no ```json``` formatting.
+You are the reasoning engine of the Present Operating System (POS).
+Interpret user input and return ONLY VALID JSON (no markdown formatting).
 
 TASK:
 {
@@ -41,15 +41,6 @@ TASK:
   "due_date": "<ISO datetime in Asia/Kolkata or null>",
   "status": "To Do",
   "context": "<original message>",
-  "source": "Parent Agent"
-}
-
-COMPLETE_TASK:
-{
-  "intent": "COMPLETE_TASK",
-  "task_name": "<title>",
-  "status": "Completed",
-  "context": "<message>",
   "source": "Parent Agent"
 }
 
@@ -71,24 +62,6 @@ EMAIL:
   "context": "<email purpose or brief content>",
   "source": "Parent Agent"
 }
-
-RESEARCH:
-{
-  "intent": "RESEARCH",
-  "topic": "<topic to research>",
-  "depth": "<summary|brief|detailed>",
-  "context": "<message>",
-  "source": "Parent Agent"
-}
-
-MESSAGE:
-{
-  "intent": "MESSAGE",
-  "priority": "<P1|P2|P3>",
-  "message": "<text to send>",
-  "context": "<message>",
-  "source": "Parent Agent"
-}
 """
 
 # ----------------- HELPERS -----------------
@@ -96,14 +69,11 @@ def clean_json_output(text: str) -> str:
     """Remove markdown formatting like ```json``` or triple backticks."""
     text = text.strip()
     if text.startswith("```"):
-        text = text.strip("`")
-        text = text.replace("json", "", 1).strip()
-    text = text.replace("```", "").strip()
-    return text
+        text = text.strip("`").replace("json", "", 1).strip()
+    return text.replace("```", "").strip()
 
 
-def call_agent(url, payload, name="Agent", timeout=30):
-    """Call child agents with error safety."""
+def call_agent(url, payload, name="Agent", timeout=25):
     try:
         r = requests.post(url, json=payload, timeout=timeout)
         return r.status_code, r.text
@@ -112,15 +82,10 @@ def call_agent(url, payload, name="Agent", timeout=30):
 
 
 def create_task_in_notion(task_data):
-    """Create a Notion Task item and return Notion page ID."""
+    """Create a task in Notion with all required fields."""
     now_iso = datetime.now(IST).isoformat()
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json",
-    }
+    due_date = task_data.get("due_date")
 
-    # Properties
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
@@ -130,12 +95,17 @@ def create_task_in_notion(task_data):
             "Massive Action Plan (M)": {"rich_text": [{"text": {"content": ', '.join(task_data.get("massive_action_plan", []))}}]},
             "PAEI Role": {"select": {"name": task_data.get("paei_role", "Producer")}},
             "Status": {"select": {"name": task_data.get("status", "To Do")}},
-            "Due Date": {"date": {"start": task_data.get("due_date")}} if task_data.get("due_date") else {"date": None},
-            "XP": {"number": 0},
+            "Due Date": {"date": {"start": due_date}} if due_date else {"date": None},
             "Created At": {"date": {"start": now_iso}},
             "Source": {"rich_text": [{"text": {"content": task_data.get("source", "Parent Agent")}}]},
             "Context": {"rich_text": [{"text": {"content": task_data.get("context", "")}}]},
         }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
     }
 
     resp = requests.post("https://api.notion.com/v1/pages", headers=headers, json=payload, timeout=15)
@@ -153,11 +123,7 @@ def update_notion_with_link(notion_id: str, field: str, link: str):
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
-    payload = {
-        "properties": {
-            field: {"url": link}
-        }
-    }
+    payload = {"properties": {field: {"url": link}}}
     resp = requests.patch(url, headers=headers, json=payload, timeout=10)
     return resp.status_code
 
@@ -190,62 +156,89 @@ def route_message():
         )
 
         raw = completion.choices[0].message.content.strip()
-        print("🧠 Raw Groq Output:", raw)
         cleaned_raw = clean_json_output(raw)
+        print("🧠 Parsed:", cleaned_raw)
 
         try:
             intent_data = json.loads(cleaned_raw)
         except Exception as e:
-            print("⚠️ JSON parsing failed:", e)
-            return jsonify({"intent": "UNKNOWN", "raw": raw}), 200
+            return jsonify({"intent": "UNKNOWN", "raw": raw, "error": str(e)}), 200
 
         intent = intent_data.get("intent", "UNKNOWN").upper()
 
-        # ------------- Intent Handling -------------
-        if intent == "TASK":
-            code, notion_id = create_task_in_notion(intent_data)
-            return jsonify({"intent": "TASK", "notion_status": code, "notion_id": notion_id}), 200
+        # ---------- Intent Handling ----------
+        if intent == "CALENDAR":
+            # Create Notion record first
+            task_info = {
+                "task_name": intent_data.get("title", "Untitled Event"),
+                "result": "Calendar event scheduled",
+                "purpose": "Manage meetings and events",
+                "massive_action_plan": ["Schedule meeting", "Confirm details"],
+                "paei_role": "Administrator",
+                "status": "To Do",
+                "context": intent_data.get("context", ""),
+                "source": "Parent Agent"
+            }
+            notion_status, notion_id = create_task_in_notion(task_info)
 
-        elif intent == "COMPLETE_TASK":
-            code, resp_text = call_agent(XP_AGENT_URL, intent_data, "XP Agent")
-            return jsonify({"intent": "COMPLETE_TASK", "xp_status": code, "xp_resp": resp_text}), 200
-
-        elif intent == "CALENDAR":
+            # Send to Calendar Agent
             code, cal_resp = call_agent(CALENDAR_AGENT_URL, intent_data, "Calendar Agent")
             try:
                 cal_data = json.loads(cal_resp)
                 html_link = cal_data.get("html_link")
-                # Optional: Append Calendar Link to Notion Task
-                if "task_id" in intent_data and html_link:
-                    update_notion_with_link(intent_data["task_id"], "Calendar Link", html_link)
-            except Exception:
-                pass
-            return jsonify({"intent": "CALENDAR", "status": "Forwarded to Calendar Agent", "cal_status": code, "cal_resp": cal_resp}), 200
+                if html_link and notion_id:
+                    update_notion_with_link(notion_id, "Calendar Link", html_link)
+            except Exception as e:
+                print("⚠️ Calendar link update failed:", e)
+
+            return jsonify({
+                "intent": "CALENDAR",
+                "status": "Forwarded to Calendar Agent",
+                "notion_id": notion_id,
+                "notion_status": notion_status,
+                "cal_status": code,
+                "cal_resp": cal_resp
+            }), 200
 
         elif intent == "EMAIL":
+            # Create Notion record first
+            task_info = {
+                "task_name": "Email Communication",
+                "result": "Email draft sent",
+                "purpose": "Handle communication tasks",
+                "massive_action_plan": ["Draft email", "Send message"],
+                "paei_role": "Administrator",
+                "status": "To Do",
+                "context": intent_data.get("context", ""),
+                "source": "Parent Agent"
+            }
+            notion_status, notion_id = create_task_in_notion(task_info)
+
+            # Send to Email Agent
             code, email_resp = call_agent(EMAIL_AGENT_URL, intent_data, "Email Agent")
             try:
                 email_data = json.loads(email_resp)
-                email_link = email_data.get("brevo_response", {}).get("messageId", None)
-                if "task_id" in intent_data and email_link:
-                    update_notion_with_link(intent_data["task_id"], "Email Link", str(email_link))
-            except Exception:
-                pass
-            return jsonify({"intent": "EMAIL", "status": "Forwarded to Email Agent", "email_status": code, "email_resp": email_resp}), 200
+                brevo_id = email_data.get("brevo_response", {}).get("messageId", "")
+                if brevo_id and notion_id:
+                    brevo_url = f"https://app.brevo.com/transactional/{brevo_id}"
+                    update_notion_with_link(notion_id, "Email Link", brevo_url)
+            except Exception as e:
+                print("⚠️ Email link update failed:", e)
 
-        elif intent == "RESEARCH":
-            code, research_resp = call_agent(RESEARCH_AGENT_URL, intent_data, "Research Agent")
-            return jsonify({"intent": "RESEARCH", "status": "Forwarded to Research Agent", "research_status": code, "research_resp": research_resp}), 200
-
-        elif intent == "MESSAGE":
-            code, msg_resp = call_agent(MESSAGING_AGENT_URL, intent_data, "Messaging Agent")
-            return jsonify({"intent": "MESSAGE", "status": "Forwarded to Messaging Agent", "msg_status": code, "msg_resp": msg_resp}), 200
+            return jsonify({
+                "intent": "EMAIL",
+                "status": "Forwarded to Email Agent",
+                "notion_id": notion_id,
+                "notion_status": notion_status,
+                "email_status": code,
+                "email_resp": email_resp
+            }), 200
 
         else:
             return jsonify({"intent": "UNKNOWN", "raw": intent_data}), 200
 
     except Exception as e:
-        print("❌ Parent Agent Error:", e)
+        print("❌ Error:", e)
         return jsonify({"error": str(e)}), 500
 
 
