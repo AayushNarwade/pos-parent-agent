@@ -74,10 +74,12 @@ def clean_json_output(text: str) -> str:
 
 
 def call_agent(url, payload, name="Agent", timeout=25):
+    """Send data to a child agent with timeout handling."""
     try:
         r = requests.post(url, json=payload, timeout=timeout)
         return r.status_code, r.text
     except Exception as e:
+        print(f"⚠️ {name} connection error:", e)
         return 500, str(e)
 
 
@@ -109,9 +111,11 @@ def create_task_in_notion(task_data):
     }
 
     resp = requests.post("https://api.notion.com/v1/pages", headers=headers, json=payload, timeout=15)
-    if resp.status_code == 200:
+    if resp.status_code in [200, 201]:
         notion_id = resp.json().get("id")
+        print(f"✅ Task created in Notion: {notion_id}")
         return 200, notion_id
+    print("❌ Notion creation failed:", resp.text)
     return resp.status_code, None
 
 
@@ -125,6 +129,10 @@ def update_notion_with_link(notion_id: str, field: str, link: str):
     }
     payload = {"properties": {field: {"url": link}}}
     resp = requests.patch(url, headers=headers, json=payload, timeout=10)
+    if resp.status_code in [200, 201]:
+        print(f"🔗 Updated {field} link in Notion successfully.")
+    else:
+        print(f"⚠️ Failed to update {field}: {resp.text}")
     return resp.status_code
 
 
@@ -168,7 +176,6 @@ def route_message():
 
         # ---------- Intent Handling ----------
         if intent == "CALENDAR":
-            # Create Notion record first
             task_info = {
                 "task_name": intent_data.get("title", "Untitled Event"),
                 "result": "Calendar event scheduled",
@@ -181,11 +188,10 @@ def route_message():
             }
             notion_status, notion_id = create_task_in_notion(task_info)
 
-            # Send to Calendar Agent
             code, cal_resp = call_agent(CALENDAR_AGENT_URL, intent_data, "Calendar Agent")
             try:
                 cal_data = json.loads(cal_resp)
-                html_link = cal_data.get("html_link")
+                html_link = cal_data.get("html_link") or cal_data.get("calendar_link")
                 if html_link and notion_id:
                     update_notion_with_link(notion_id, "Calendar Link", html_link)
             except Exception as e:
@@ -201,7 +207,6 @@ def route_message():
             }), 200
 
         elif intent == "EMAIL":
-            # Create Notion record first
             task_info = {
                 "task_name": "Email Communication",
                 "result": "Email draft sent",
@@ -214,7 +219,6 @@ def route_message():
             }
             notion_status, notion_id = create_task_in_notion(task_info)
 
-            # Send to Email Agent
             code, email_resp = call_agent(EMAIL_AGENT_URL, intent_data, "Email Agent")
             try:
                 email_data = json.loads(email_resp)
