@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: pos-parent-agent
+    name: pos-parent-agent-v2
     env: python
     plan: free
     region: singapore
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn -w 2 -b 0.0.0.0:10000 parent_agent:app"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT parent_agent_v2:app
     envVars:
       - key: GROQ_API_KEY
         sync: false
@@ -13,9 +13,13 @@ services:
         sync: false
       - key: NOTION_DATABASE_ID
         sync: false
-      - key: EMAIL_AGENT_URL
-        sync: false
       - key: XP_AGENT_URL
-        sync: false
+        value: "https://xp-agent.onrender.com/award_xp"
       - key: CALENDAR_AGENT_URL
-        sync: false
+        value: "https://calendar-agent.onrender.com/create_event"
+      - key: EMAIL_AGENT_URL
+        value: "https://email-agent.onrender.com/create_draft"
+      - key: RESEARCH_AGENT_URL
+        value: "https://research-agent.onrender.com/research"
+      - key: MESSAGING_AGENT_URL
+        value: "https://messaging-agent.onrender.com/notify"

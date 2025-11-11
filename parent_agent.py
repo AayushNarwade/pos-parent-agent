@@ -2,339 +2,248 @@ from flask import Flask, request, jsonify
 import os
 import json
 import requests
-from groq import Groq
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime
 from dotenv import load_dotenv
+import pytz
+from groq import Groq
 
+# ----------------- Setup -----------------
 app = Flask(__name__)
 load_dotenv()
 
-# ========== ENVIRONMENT VARIABLES ==========
+# Env
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+
 XP_AGENT_URL = os.getenv("XP_AGENT_URL", "https://xp-agent.onrender.com/award_xp")
-CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "http://127.0.0.1:10002/create_event")
-EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "http://127.0.0.1:10003/create_draft")
+CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "https://calendar-agent.onrender.com/create_event")
+EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent.onrender.com/create_draft")
+RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "https://research-agent.onrender.com/research")
+MESSAGING_AGENT_URL = os.getenv("MESSAGING_AGENT_URL", "https://messaging-agent.onrender.com/notify")
 
-print("🔧 Config:")
-print("  GROQ_API_KEY:", bool(GROQ_API_KEY))
-print("  NOTION_API_KEY:", bool(NOTION_API_KEY))
-print("  NOTION_DATABASE_ID:", NOTION_DATABASE_ID)
-print("  EMAIL_AGENT_URL:", EMAIL_AGENT_URL)
-
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 IST = pytz.timezone("Asia/Kolkata")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# ========== UPDATED SYSTEM PROMPT ==========
+# ----------------- System prompt (expects context + source) -----------------
 SYSTEM_PROMPT = """
-You are the reasoning engine of the Present Operating System (POS).
-You must classify and structure messages into actionable data.
+You are the core reasoning engine of the Present Operating System (POS).
+Interpret user input and return ONLY valid JSON according to the cases below.
 
-If the message is a scheduling, calling, or reminder type (like 'remind me', 'schedule', 'call'):
-Return ONLY valid JSON in this format:
+TASK (create a task) -> include RPM + PAEI + trace fields:
 {
   "intent": "TASK",
-  "task_name": "<clean short task name, e.g., 'Call Client'>",
-  "person_name": "<who the task involves, e.g., 'Aayush'>",
-  "due_date": "<ISO8601 datetime in IST, if mentioned, else null>",
+  "task_name": "<short clear title>",
+  "result": "<expected outcome>",
+  "purpose": "<why the user wants this>",
+  "massive_action_plan": ["<step 1>", "<step 2>"],
+  "paei_role": "<Producer|Administrator|Entrepreneur|Integrator>",
+  "due_date": "<ISO datetime in Asia/Kolkata or null>",
   "status": "To Do",
-  "avatar": "Producer",
-  "xp": 0
+  "context": "<original user message>",
+  "source": "Parent Agent"
 }
 
-If the message indicates completion (like 'mark done', 'completed', 'finished'):
-Return ONLY valid JSON in this format:
+COMPLETE_TASK:
 {
   "intent": "COMPLETE_TASK",
-  "task_name": "<the task name or key phrase>",
-  "avatar": "Producer",
-  "status": "Completed"
+  "task_name": "<task title>",
+  "status": "Completed",
+  "context": "<original user message>",
+  "source": "Parent Agent"
 }
 
-If the message is an email-type instruction (like 'send an email', 'thank John', 'write to Sarah'):
-Return ONLY valid JSON in this format:
+CALENDAR (schedule event):
+{
+  "intent": "CALENDAR",
+  "title": "<event title>",
+  "start_time": "<ISO start>",
+  "end_time": "<ISO end>",
+  "description": "<event description>",
+  "context": "<original user message>",
+  "source": "Parent Agent"
+}
+
+EMAIL:
 {
   "intent": "EMAIL",
-  "to": "<recipient email if known, else null>",
-  "context": "<the content or purpose of the email>"
+  "to": "<recipient email or null>",
+  "context": "<email purpose or brief content>",
+  "source": "Parent Agent"
 }
 
-If it's a question or non-task, return:
+RESEARCH:
 {
   "intent": "RESEARCH",
-  "question": "<the user's query>"
+  "topic": "<what to research>",
+  "depth": "<summary|brief|detailed>",
+  "context": "<original user message>",
+  "source": "Parent Agent"
 }
 
-Do NOT include explanations or markdown — only JSON.
+MESSAGE:
+{
+  "intent": "MESSAGE",
+  "priority": "<P1|P2|P3>",
+  "message": "<text to send>",
+  "context": "<original user message>",
+  "source": "Parent Agent"
+}
 """
 
-# ========== HELPERS ==========
+# ----------------- Helpers -----------------
+def call_agent(url, payload, name="Agent", timeout=15):
+    try:
+        r = requests.post(url, json=payload, timeout=timeout)
+        return r.status_code, r.text
+    except Exception as e:
+        return 500, str(e)
 
-def find_task_in_notion(task_name):
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-    body = {
-        "filter": {"property": "Task", "title": {"contains": task_name}}
+def create_task_in_notion(task_data):
+    """
+    Insert a task into Notion using the final schema including Source and Context.
+    """
+    now_iso = datetime.now(IST).isoformat()
+    # safe getters and fallbacks
+    task_name = task_data.get("task_name", "Untitled Task")
+    result = task_data.get("result", "")
+    purpose = task_data.get("purpose", "")
+    map_list = task_data.get("massive_action_plan") or []
+    paei_role = task_data.get("paei_role", "Producer")
+    status = task_data.get("status", "To Do")
+    due_date = task_data.get("due_date")
+    context_txt = task_data.get("context", "")
+    source_txt = task_data.get("source", "Parent Agent")
+
+    payload = {
+        "parent": {"database_id": NOTION_DATABASE_ID},
+        "properties": {
+            "Task": {"title": [{"text": {"content": task_name}}]},
+            "Result (R)": {"rich_text": [{"text": {"content": result}}]},
+            "Purpose (P)": {"rich_text": [{"text": {"content": purpose}}]},
+            "Massive Action Plan (M)": {"rich_text": [{"text": {"content": ', '.join(map_list)}}]},
+            "PAEI Role": {"select": {"name": paei_role}},
+            "Status": {"select": {"name": status}},
+            "Due Date": {"date": {"start": due_date}} if due_date else {"date": None},
+            "XP": {"number": 0},
+            "Created At": {"date": {"start": now_iso}},
+            "Source": {"rich_text": [{"text": {"content": source_txt}}]},
+            "Context": {"rich_text": [{"text": {"content": context_txt}}]}
+        }
     }
+
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json",
     }
 
-    r = requests.post(url, headers=headers, json=body)
-    if r.status_code != 200:
-        print("❌ Error searching task:", r.text)
-        return None
-    results = r.json().get("results", [])
-    if not results:
-        print("⚠️ Task not found in Notion.")
-        return None
-    return results[0]["id"]
+    resp = requests.post("https://api.notion.com/v1/pages", headers=headers, json=payload, timeout=15)
+    return resp.status_code, resp.text
 
+# ----------------- Routes -----------------
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "✅ POS Parent Agent v2 Running"}), 200
 
-def update_task_status(page_id, new_status="Completed"):
-    url = f"https://api.notion.com/v1/pages/{page_id}"
-    body = {"properties": {"Status": {"select": {"name": new_status}}}}
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json",
-    }
-    r = requests.patch(url, headers=headers, json=body)
-    if r.status_code not in [200, 201]:
-        print("❌ Failed to update task status:", r.text)
-        return False
-    print(f"✅ Task status updated to {new_status}")
-    return True
-
-
-def call_xp_agent(task_name, avatar="Producer", reason="Task Completed", due_date=None):
-    payload = {
-        "task_name": task_name,
-        "avatar": avatar,
-        "due_date": due_date,
-        "reason": reason,
-    }
-    try:
-        r = requests.post(XP_AGENT_URL, json=payload)
-        print(f"📩 XP Agent Response: {r.status_code} - {r.text}")
-        return r.status_code, r.text
-    except Exception as e:
-        print("❌ Failed to contact XP Agent:", e)
-        return 500, str(e)
-
-
-def call_calendar_agent(title, description, start_iso, end_iso=None):
-    payload = {
-        "title": title,
-        "description": description or "",
-        "start_time": start_iso,
-        "end_time": end_iso or (datetime.fromisoformat(start_iso) + timedelta(minutes=30)).isoformat(),
-    }
-
-    try:
-        r = requests.post(CALENDAR_AGENT_URL, json=payload, timeout=6)
-        print("📆 Calendar Agent Response:", r.status_code, r.text)
-        return r.status_code, r.text
-    except Exception as e:
-        print("❌ Failed to reach Calendar Agent:", e)
-        return 500, str(e)
-
-
-def call_email_agent(to_email, context):
-    """
-    Calls the AI Email Agent to create an email draft.
-    Render free instances can have cold-start delays, so use a longer timeout.
-    """
-    payload = {"to": to_email, "context": context}
-    try:
-        r = requests.post(EMAIL_AGENT_URL, json=payload, timeout=35)  # increased from 10 → 35 sec
-        print("📧 Email Agent Response:", r.status_code, r.text)
-        return r.status_code, r.text
-    except requests.exceptions.ReadTimeout:
-        print("⚠️ Email Agent took too long to respond (timeout). Consider waking it manually.")
-        return 504, "Email Agent timeout — service may be waking up."
-    except Exception as e:
-        print("❌ Failed to contact Email Agent:", e)
-        return 500, str(e)
-
-
-
-# ========== ENDPOINT ==========
 @app.route("/route", methods=["POST"])
 def route_message():
     try:
-        data = request.get_json()
+        data = request.get_json(force=True)
         message = data.get("message", "").strip()
         if not message:
-            return jsonify({"error": "Empty message"}), 400
+            return jsonify({"error": "Missing 'message'"}), 400
 
-        # Inject current IST time
-        current_time_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S %Z")
-        system_prompt_with_date = (
-            SYSTEM_PROMPT
-            + f"\n\nToday's date and time (IST): {current_time_ist}."
-            + " Always generate due_date relative to this current date."
-        )
-
+        # include original message in system/user context (helps Groq produce 'context')
         if not client:
             return jsonify({"error": "Groq client not configured (missing GROQ_API_KEY)"}), 500
 
-        # --- Groq classification ---
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": system_prompt_with_date},
-                {"role": "user", "content": message},
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": message}
             ],
-            temperature=0.3,
-            max_tokens=300,
+            temperature=0.25,
+            max_tokens=600,
         )
 
-        raw_reply = completion.choices[0].message.content.strip()
-        print("🧠 Raw Groq Response:", raw_reply)
+        raw = completion.choices[0].message.content.strip()
+        print("🧠 Groq output:", raw)
 
-        # Parse JSON
         try:
-            result = json.loads(raw_reply)
-        except Exception:
-            # Return raw reply to help debugging / fallback
-            return jsonify({"intent": "UNKNOWN", "raw_reply": raw_reply}), 200
+            intent_data = json.loads(raw)
+        except Exception as e:
+            # return raw for debug if model didn't produce valid JSON
+            return jsonify({"intent": "UNKNOWN", "raw": raw}), 200
 
-        intent = result.get("intent")
+        intent = intent_data.get("intent")
 
-        # ------------------ TASK CREATION ------------------
+        # handle intents
         if intent == "TASK":
-            task_name = result.get("task_name", "Untitled Task")
-            person_name = result.get("person_name", "Unknown")
-            due_date = result.get("due_date")
-            status = result.get("status", "To Do")
-            avatar = result.get("avatar", "Producer")
-            xp = result.get("xp", 0)
+            # ensure context + source exist
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
 
-            now_ist = datetime.now(IST)
-            if not due_date or str(now_ist.year) not in due_date:
-                due_date = now_ist.isoformat()
+            code, resp_text = create_task_in_notion(intent_data)
+            return jsonify({"intent": "TASK", "status": "Task created", "notion_status": code, "notion_response": resp_text}), 200
 
-            payload = {
-                "parent": {"database_id": NOTION_DATABASE_ID},
-                "properties": {
-                    "Task": {"title": [{"text": {"content": task_name}}]},
-                    "Name": {"rich_text": [{"text": {"content": person_name}}]},
-                    "Status": {"select": {"name": status}},
-                    "Avatar": {"select": {"name": avatar}},
-                    "XP": {"number": xp},
-                    "Due Date": {"date": {"start": due_date}},
-                },
-            }
-
-            headers = {
-                "Authorization": f"Bearer {NOTION_API_KEY}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json",
-            }
-
-            notion_resp = requests.post("https://api.notion.com/v1/pages", headers=headers, json=payload)
-            print("📝 Notion Response:", notion_resp.status_code, notion_resp.text)
-
-            if notion_resp.status_code not in (200, 201):
-                return jsonify({"error": "Failed to add to Notion", "details": notion_resp.text}), 500
-
-            # Optional calendar
-            try:
-                dt_start = datetime.fromisoformat(due_date)
-                dt_end = dt_start + timedelta(minutes=30)
-                call_calendar_agent(task_name, f"Auto-scheduled task: {task_name}", dt_start.isoformat(), dt_end.isoformat())
-            except Exception as e:
-                print("⚠️ Calendar scheduling skipped:", e)
-
-            return jsonify({
-                "intent": "TASK",
-                "status": "Task added to Notion (and Calendar if due_date found)",
-                "task_name": task_name,
-                "person_name": person_name,
-                "xp": xp,
-                "due_date": due_date,
-            }), 200
-
-        # ------------------ TASK COMPLETION ------------------
         elif intent == "COMPLETE_TASK":
-            task_name = result.get("task_name", "").strip()
-            avatar = result.get("avatar", "Producer")
+            # forward to XP Agent (XP Agent will update notion / ledger)
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
 
-            page_id = find_task_in_notion(task_name)
-            if not page_id:
-                return jsonify({"status": "error", "message": f"Task '{task_name}' not found"}), 404
+            code, resp_text = call_agent(XP_AGENT_URL, intent_data, name="XP Agent")
+            return jsonify({"intent": "COMPLETE_TASK", "status": "Forwarded to XP Agent", "xp_status": code, "xp_resp": resp_text}), 200
 
-            updated = update_task_status(page_id, "Completed")
-            if not updated:
-                return jsonify({"status": "error", "message": "Failed to update Notion task"}), 500
-
-            xp_status, xp_response = call_xp_agent(task_name, avatar, "Task Completed")
-
-            return jsonify({
-                "intent": "COMPLETE_TASK",
-                "status": "Task marked as completed ✅",
-                "task_name": task_name,
-                "xp_agent_response": xp_response,
-            }), 200
-
-        # ------------------ EMAIL HANDLER ------------------
         elif intent == "EMAIL":
-            # If the model didn't provide a to/context, use safe fallbacks:
-            to_email = result.get("to") or "john@example.com"
-            # Prefer explicit 'context' from model; otherwise fallback to the original message
-            context = result.get("context") or message
-            if not context.strip():
-                context = message
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
 
-            payload_preview = {"to": to_email, "context": context}
-            print("📨 Email Payload to Agent:", payload_preview)
+            code, resp_text = call_agent(EMAIL_AGENT_URL, intent_data, name="Email Agent")
+            return jsonify({"intent": "EMAIL", "status": "Forwarded to Email Agent", "email_status": code, "email_resp": resp_text}), 200
 
-            status, resp = call_email_agent(to_email, context)
-            if status not in [200, 201]:
-                print("❌ Email Agent Failure:", resp)
-                return jsonify({
-                    "error": "Email agent failed",
-                    "sent_payload": payload_preview,
-                    "details": resp
-                }), 500
+        elif intent == "CALENDAR":
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
 
-            # parse response from email agent if possible
-            try:
-                email_resp = json.loads(resp) if isinstance(resp, str) else resp
-            except Exception:
-                email_resp = {"raw_response": resp}
+            code, resp_text = call_agent(CALENDAR_AGENT_URL, intent_data, name="Calendar Agent")
+            return jsonify({"intent": "CALENDAR", "status": "Forwarded to Calendar Agent", "cal_status": code, "cal_resp": resp_text}), 200
 
-            return jsonify({
-                "intent": "EMAIL",
-                "status": "Email draft created successfully ✅",
-                "response": email_resp
-            }), 200
-
-        # ------------------ RESEARCH HANDLER ------------------
         elif intent == "RESEARCH":
-            return jsonify({
-                "intent": "RESEARCH",
-                "response": "Research processing coming soon!"
-            }), 200
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
+
+            code, resp_text = call_agent(RESEARCH_AGENT_URL, intent_data, name="Research Agent")
+            return jsonify({"intent": "RESEARCH", "status": "Forwarded to Research Agent", "research_status": code, "research_resp": resp_text}), 200
+
+        elif intent == "MESSAGE":
+            if "context" not in intent_data:
+                intent_data["context"] = message
+            if "source" not in intent_data:
+                intent_data["source"] = "Parent Agent"
+
+            code, resp_text = call_agent(MESSAGING_AGENT_URL, intent_data, name="Messaging Agent")
+            return jsonify({"intent": "MESSAGE", "status": "Forwarded to Messaging Agent", "msg_status": code, "msg_resp": resp_text}), 200
 
         else:
-            return jsonify({"intent": "UNKNOWN", "response": raw_reply}), 200
+            return jsonify({"intent": "UNKNOWN", "raw": intent_data}), 200
 
     except Exception as e:
-        print("❌ Server Error:", e)
+        print("❌ Parent error:", e)
         return jsonify({"error": str(e)}), 500
 
-
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "Parent Agent running ✅"})
-
-
+# ----------------- Main -----------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))  # Render injects its own $PORT
+    port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
