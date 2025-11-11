@@ -18,7 +18,7 @@ NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
 XP_AGENT_URL = os.getenv("XP_AGENT_URL", "https://xp-agent.onrender.com/award_xp")
 CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "https://calendar-agent-7ofo.onrender.com/create_event")
-EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent.onrender.com/create_draft")
+EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent-x7n0.onrender.com/create_draft")  # updated
 RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "https://research-agent.onrender.com/research")
 MESSAGING_AGENT_URL = os.getenv("MESSAGING_AGENT_URL", "https://messaging-agent.onrender.com/notify")
 
@@ -58,7 +58,6 @@ CALENDAR:
 EMAIL:
 {
   "intent": "EMAIL",
-  "to": "<recipient email>",
   "context": "<email purpose or brief content>",
   "source": "Parent Agent"
 }
@@ -153,6 +152,7 @@ def route_message():
         if not client:
             return jsonify({"error": "Groq client not configured"}), 500
 
+        # LLM determines intent
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -174,7 +174,7 @@ def route_message():
 
         intent = intent_data.get("intent", "UNKNOWN").upper()
 
-        # ---------- Intent Handling ----------
+        # ---------- CALENDAR ----------
         if intent == "CALENDAR":
             task_info = {
                 "task_name": intent_data.get("title", "Untitled Event"),
@@ -206,6 +206,7 @@ def route_message():
                 "cal_resp": cal_resp
             }), 200
 
+        # ---------- EMAIL ----------
         elif intent == "EMAIL":
             task_info = {
                 "task_name": "Email Communication",
@@ -219,13 +220,16 @@ def route_message():
             }
             notion_status, notion_id = create_task_in_notion(task_info)
 
+            # Add static email
+            intent_data["to"] = "narwadeaayush169@gmail.com"
+
             code, email_resp = call_agent(EMAIL_AGENT_URL, intent_data, "Email Agent")
             try:
                 email_data = json.loads(email_resp)
-                brevo_id = email_data.get("brevo_response", {}).get("messageId", "")
-                if brevo_id and notion_id:
-                    brevo_url = f"https://app.brevo.com/transactional/{brevo_id}"
-                    update_notion_with_link(notion_id, "Email Link", brevo_url)
+                message_id = email_data.get("brevo_response", {}).get("messageId", "")
+                if message_id and notion_id:
+                    email_url = f"https://app.brevo.com/email/{message_id}"
+                    update_notion_with_link(notion_id, "Email Link", email_url)
             except Exception as e:
                 print("⚠️ Email link update failed:", e)
 
@@ -238,6 +242,7 @@ def route_message():
                 "email_resp": email_resp
             }), 200
 
+        # ---------- UNKNOWN ----------
         else:
             return jsonify({"intent": "UNKNOWN", "raw": intent_data}), 200
 
