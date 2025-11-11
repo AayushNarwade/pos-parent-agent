@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pytz
 from groq import Groq
@@ -18,7 +18,7 @@ NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
 XP_AGENT_URL = os.getenv("XP_AGENT_URL", "https://xp-agent.onrender.com/award_xp")
 CALENDAR_AGENT_URL = os.getenv("CALENDAR_AGENT_URL", "https://calendar-agent-7ofo.onrender.com/create_event")
-EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent-x7n0.onrender.com/create_draft")  # updated
+EMAIL_AGENT_URL = os.getenv("EMAIL_AGENT_URL", "https://email-agent-x7n0.onrender.com/create_draft")
 RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "https://research-agent.onrender.com/research")
 MESSAGING_AGENT_URL = os.getenv("MESSAGING_AGENT_URL", "https://messaging-agent.onrender.com/notify")
 
@@ -30,12 +30,22 @@ SYSTEM_PROMPT = """
 You are the reasoning engine of the Present Operating System (POS).
 Interpret user input and return ONLY VALID JSON (no markdown formatting).
 
-TASK:
+You must identify the user's intent and return one of these:
+- TASK: create a new task or reminder
+- CALENDAR: schedule an event
+- EMAIL: compose or send an email
+- COMPLETION: when the user indicates they finished a task or activity
+
+Use temporal reasoning to determine due dates in Asia/Kolkata timezone (ISO format).
+
+---
+
+### TASK FORMAT:
 {
   "intent": "TASK",
-  "task_name": "<title>",
+  "task_name": "<short title>",
   "result": "<expected outcome>",
-  "purpose": "<why>",
+  "purpose": "<why it matters>",
   "massive_action_plan": ["<step 1>", "<step 2>"],
   "paei_role": "<Producer|Administrator|Entrepreneur|Integrator>",
   "due_date": "<ISO datetime in Asia/Kolkata or null>",
@@ -44,21 +54,39 @@ TASK:
   "source": "Parent Agent"
 }
 
-CALENDAR:
+### COMPLETION FORMAT:
 {
-  "intent": "CALENDAR",
-  "title": "<event title>",
-  "start_time": "<ISO start>",
-  "end_time": "<ISO end>",
-  "description": "<event description>",
-  "context": "<message>",
+  "intent": "COMPLETION",
+  "message": "<the user's sentence about finishing something>",
+  "context": "<additional clues like task or event name>",
   "source": "Parent Agent"
 }
 
-EMAIL:
+---
+
+### EXAMPLES:
+
+User: "Remind me to call Aayush at 9pm"
+→
 {
-  "intent": "EMAIL",
-  "context": "<email purpose or brief content>",
+  "intent": "TASK",
+  "task_name": "Call Aayush",
+  "result": "Reminder to call Aayush",
+  "purpose": "Stay connected with team member",
+  "massive_action_plan": ["Set reminder", "Make call"],
+  "paei_role": "Integrator",
+  "due_date": "2025-11-12T21:00:00+05:30",
+  "status": "To Do",
+  "context": "Remind me to call Aayush at 9pm",
+  "source": "Parent Agent"
+}
+
+User: "I have called Aayush"
+→
+{
+  "intent": "COMPLETION",
+  "message": "I have called Aayush",
+  "context": "related to the task 'Call Aayush'",
   "source": "Parent Agent"
 }
 """
@@ -87,6 +115,10 @@ def create_task_in_notion(task_data):
     now_iso = datetime.now(IST).isoformat()
     due_date = task_data.get("due_date")
 
+    # Default fallback: same day 11:59 PM
+    if not due_date:
+        due_date = (datetime.now(IST).replace(hour=23, minute=59, second=0)).isoformat()
+
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
@@ -96,7 +128,8 @@ def create_task_in_notion(task_data):
             "Massive Action Plan (M)": {"rich_text": [{"text": {"content": ', '.join(task_data.get("massive_action_plan", []))}}]},
             "PAEI Role": {"select": {"name": task_data.get("paei_role", "Producer")}},
             "Status": {"select": {"name": task_data.get("status", "To Do")}},
-            "Due Date": {"date": {"start": due_date}} if due_date else {"date": None},
+            "XP": {"number": 0},  # Default XP
+            "Due Date": {"date": {"start": due_date}},
             "Created At": {"date": {"start": now_iso}},
             "Source": {"rich_text": [{"text": {"content": task_data.get("source", "Parent Agent")}}]},
             "Context": {"rich_text": [{"text": {"content": task_data.get("context", "")}}]},
@@ -138,7 +171,7 @@ def update_notion_with_link(notion_id: str, field: str, link: str):
 # ----------------- ROUTES -----------------
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "✅ POS Parent Agent v2 Running"}), 200
+    return jsonify({"status": "✅ POS Parent Agent (Completion Enabled) Running"}), 200
 
 
 @app.route("/route", methods=["POST"])
@@ -152,14 +185,13 @@ def route_message():
         if not client:
             return jsonify({"error": "Groq client not configured"}), 500
 
-        # LLM determines intent
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": message},
             ],
-            temperature=0.2,
+            temperature=0.3,
             max_tokens=600,
         )
 
@@ -174,8 +206,29 @@ def route_message():
 
         intent = intent_data.get("intent", "UNKNOWN").upper()
 
+        # ---------- TASK ----------
+        if intent == "TASK":
+            notion_status, notion_id = create_task_in_notion(intent_data)
+            return jsonify({
+                "intent": "TASK",
+                "status": "Task created in Notion",
+                "notion_id": notion_id,
+                "notion_status": notion_status
+            }), 200
+
+        # ---------- COMPLETION ----------
+        elif intent == "COMPLETION":
+            # forward to XP Agent
+            code, xp_resp = call_agent(XP_AGENT_URL, intent_data, "XP Agent")
+            return jsonify({
+                "intent": "COMPLETION",
+                "status": "Forwarded to XP Agent",
+                "xp_status": code,
+                "xp_resp": xp_resp
+            }), 200
+
         # ---------- CALENDAR ----------
-        if intent == "CALENDAR":
+        elif intent == "CALENDAR":
             task_info = {
                 "task_name": intent_data.get("title", "Untitled Event"),
                 "result": "Calendar event scheduled",
@@ -187,8 +240,8 @@ def route_message():
                 "source": "Parent Agent"
             }
             notion_status, notion_id = create_task_in_notion(task_info)
-
             code, cal_resp = call_agent(CALENDAR_AGENT_URL, intent_data, "Calendar Agent")
+
             try:
                 cal_data = json.loads(cal_resp)
                 html_link = cal_data.get("html_link") or cal_data.get("calendar_link")
@@ -219,8 +272,6 @@ def route_message():
                 "source": "Parent Agent"
             }
             notion_status, notion_id = create_task_in_notion(task_info)
-
-            # Add static email
             intent_data["to"] = "narwadeaayush169@gmail.com"
 
             code, email_resp = call_agent(EMAIL_AGENT_URL, intent_data, "Email Agent")
@@ -254,5 +305,5 @@ def route_message():
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
-    print(f"🚀 Parent Agent v2 running on port {port}")
+    print(f"🚀 Parent Agent running locally on port {port}")
     app.run(host="0.0.0.0", port=port)

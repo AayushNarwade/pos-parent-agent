@@ -5,10 +5,12 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT parent_agent_v2:app
+    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app # ✅ stable for Render free plan
 
     envVars:
+      # -------------------
       # Core AI + Notion Credentials
+      # -------------------
       - key: GROQ_API_KEY
         sync: false
       - key: NOTION_API_KEY
@@ -16,14 +18,27 @@ services:
       - key: NOTION_DATABASE_ID
         sync: false
 
-      # Linked Agents
+      # -------------------
+      # Linked Child Agents
+      # -------------------
       - key: XP_AGENT_URL
         value: "https://xp-agent.onrender.com/award_xp"
       - key: CALENDAR_AGENT_URL
         value: "https://calendar-agent-7ofo.onrender.com/create_event"
       - key: EMAIL_AGENT_URL
-        value: "https://email-agent.onrender.com/create_draft"
+        value: "https://email-agent-x7n0.onrender.com/create_draft"
       - key: RESEARCH_AGENT_URL
         value: "https://research-agent.onrender.com/research"
       - key: MESSAGING_AGENT_URL
         value: "https://messaging-agent.onrender.com/notify"
+
+      # -------------------
+      # Python Version
+      # -------------------
+      - key: PYTHON_VERSION
+        value: 3.10
+
+    # -------------------
+    # Health Check
+    # -------------------
+    healthCheckPath: /
