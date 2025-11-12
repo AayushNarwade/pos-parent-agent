@@ -367,6 +367,7 @@ def route_message():
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    print(f"🚀 Parent Agent running locally on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 5000))  # ✅ default 5000 if not set
+    print(f"🚀 POS Parent Agent running on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
+
