@@ -143,7 +143,7 @@ def clean_json_output(text: str) -> str:
     return text.replace("```", "").strip()
 
 
-def call_agent(url, payload, name="Agent", timeout=25):
+def call_agent(url, payload, name="Agent", timeout=90):
     """Send data to a child agent with timeout handling."""
     try:
         r = requests.post(url, json=payload, timeout=timeout)
