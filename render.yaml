@@ -8,8 +8,11 @@ services:
     # -------------------
     # Build & Start Commands
     # -------------------
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app # ✅ stable for Render Free plan
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app  # ✅ Stable for Render Free plan
 
     # -------------------
     # Environment Variables
@@ -31,7 +34,7 @@ services:
       - key: EMAIL_AGENT_URL
         value: "https://email-agent-x7n0.onrender.com/create_draft"
       - key: RESEARCH_AGENT_URL
-        value: "https://research-agent.onrender.com/research"
+        value: "https://research-agent-ih4t.onrender.com/research"
       - key: MESSAGING_AGENT_URL
         value: "https://messaging-agent.onrender.com/notify"
 

@@ -35,6 +35,7 @@ You must identify the user's intent and return one of these:
 - CALENDAR: schedule an event
 - EMAIL: compose or send an email
 - COMPLETION: when the user indicates they finished a task or activity
+- RESEARCH: when the user asks to find, summarize, or analyze information
 
 Use temporal reasoning to determine due dates in Asia/Kolkata timezone (ISO format).
 
@@ -71,6 +72,14 @@ Use temporal reasoning to determine due dates in Asia/Kolkata timezone (ISO form
   "start_time": "<ISO datetime>",
   "end_time": "<ISO datetime>",
   "context": "<original message>",
+  "source": "Parent Agent"
+}
+
+### RESEARCH FORMAT:
+{
+  "intent": "RESEARCH",
+  "query": "<what to research or analyze>",
+  "context": "<original user message>",
   "source": "Parent Agent"
 }
 
@@ -112,6 +121,15 @@ User: "Schedule a meeting with team to discuss design at 4pm"
   "start_time": "2025-11-12T16:00:00+05:30",
   "end_time": "2025-11-12T17:00:00+05:30",
   "context": "Schedule a meeting with team to discuss design at 4pm",
+  "source": "Parent Agent"
+}
+
+User: "Research about applications of generative AI in finance"
+→
+{
+  "intent": "RESEARCH",
+  "query": "applications of generative AI in finance",
+  "context": "Research about applications of generative AI in finance",
   "source": "Parent Agent"
 }
 """
@@ -319,6 +337,23 @@ def route_message():
                 "notion_status": notion_status,
                 "email_status": code,
                 "email_resp": email_resp
+            }), 200
+
+        # ---------- RESEARCH ----------
+        elif intent == "RESEARCH":
+            print("🔍 Forwarding to Research Agent...")
+            research_payload = {"query": intent_data.get("query") or message}
+            code, research_resp = call_agent(RESEARCH_AGENT_URL, research_payload, "Research Agent")
+            try:
+                research_data = json.loads(research_resp)
+            except Exception:
+                research_data = {"raw_response": research_resp}
+
+            return jsonify({
+                "intent": "RESEARCH",
+                "status": "Forwarded to Research Agent",
+                "research_status": code,
+                "research_resp": research_data
             }), 200
 
         # ---------- UNKNOWN ----------
