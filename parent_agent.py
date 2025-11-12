@@ -349,12 +349,13 @@ def route_message():
             except Exception:
                 research_data = {"raw_response": research_resp}
 
-            return jsonify({
+            return {
                 "intent": "RESEARCH",
                 "status": "Forwarded to Research Agent",
                 "research_status": code,
                 "research_resp": research_data
-            }), 200
+            }, 200
+
 
         # ---------- UNKNOWN ----------
         else:
