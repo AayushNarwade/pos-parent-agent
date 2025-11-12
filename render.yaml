@@ -12,7 +12,7 @@ services:
       pip install --upgrade pip
       pip install -r requirements.txt
 
-    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT parent_agent:app  # ✅ Stable for Render Free plan
+    startCommand: python parent_agent.py
 
     # -------------------
     # Environment Variables
